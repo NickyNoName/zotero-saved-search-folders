@@ -1,0 +1,17 @@
+{
+  "addons": {
+    "saved-search-folders@nickynoname.github.io": {
+      "updates": [
+        {
+          "version": "1.0",
+          "update_link": "https://github.com/NickyNoName/zotero-saved-search-folders/releases/download/v1.0/saved-search-folders-1.0.xpi",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "7.0"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
