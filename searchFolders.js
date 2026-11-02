@@ -1,6 +1,6 @@
 /* global Zotero, Services */
 /*
- * Saved Search Folders for Zotero 7–9
+ * Saved Search Folders for Zotero 10
  *
  * Everything is stored in the saved search name, so it syncs and degrades gracefully:
  *
@@ -18,15 +18,19 @@
 
 SavedSearchFolders = {
 	PREF_SEPARATOR: 'extensions.savedsearchfolders.separator',
+	PREF_ORDER_SEPARATOR: 'extensions.savedsearchfolders.orderSeparator',
 	PREF_OPEN: 'extensions.savedsearchfolders.openFolders',
 	PREF_ROOT: 'extensions.savedsearchfolders.rootFolder',
 	ROOT_LABEL: 'Saved Searches',
 	ROW_PREFIX: 'HSF',
-	CHILD_INDENT: 16,
-	ORDER_RE: /^(\d+)_\s*/,
 	// Search-level options that are stored as conditions
-	FLAG_CONDITIONS: ['noChildren', 'includeParentsAndChildren', 'includeParents', 'includeChildren',
-		'includeDeleted', 'recursive'],
+	FLAG_CONDITIONS: ['resultLevel', 'noChildren', 'includeParentsAndChildren', 'includeParents',
+		'includeChildren', 'includeDeleted', 'recursive'],
+	// What Zotero's own advanced search starts from
+	BLANK_CONDITIONS: [
+		{ condition: 'resultLevel', operator: 'item', value: '' },
+		{ condition: 'title', operator: 'contains', value: '' }
+	],
 	STYLE: `
 		/* Folder icon: Zotero's collection glyph in the saved-search cyan */
 		#collection-tree .row.ssf-folder .icon-css.icon-collection {
@@ -56,11 +60,22 @@ SavedSearchFolders = {
 			background: rgba(255, 255, 255, 0.28);
 		}
 		/* Drag-and-drop position indicator */
-		#collection-tree .row.ssf-drop-before {
-			box-shadow: inset 0 2px 0 var(--accent-blue);
+		#collection-tree .row.ssf-drop-before::before,
+		#collection-tree .row.ssf-drop-after::after {
+			content: "";
+			position: absolute;
+			inset-inline: 4px;
+			height: 2px;
+			border-radius: 1px;
+			background: var(--color-accent);
+			pointer-events: none;
+			z-index: 1;
 		}
-		#collection-tree .row.ssf-drop-after {
-			box-shadow: inset 0 -2px 0 var(--accent-blue);
+		#collection-tree .row.ssf-drop-before::before {
+			top: -1px;
+		}
+		#collection-tree .row.ssf-drop-after::after {
+			bottom: -1px;
 		}
 	`,
 
@@ -95,21 +110,35 @@ SavedSearchFolders = {
 		return (typeof sep == 'string' && sep.trim()) ? sep.trim() : '/';
 	},
 
+	getOrderSeparator() {
+		let sep = Zotero.Prefs.get(this.PREF_ORDER_SEPARATOR, true);
+		sep = typeof sep == 'string' ? sep.trim() : '';
+		// Names are split on the folder separator first, so the two can't overlap
+		let folderSep = this.getSeparator();
+		return sep && !sep.includes(folderSep) && !folderSep.includes(sep) ? sep : '_';
+	},
+
+	orderRegExp() {
+		let sep = this.getOrderSeparator().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		return new RegExp(`^(\\d+)${sep}\\s*`);
+	},
+
 	splitPath(text) {
 		return String(text || '').split(this.getSeparator()).map(s => s.trim()).filter(Boolean);
 	},
 
 	segmentName(raw) {
-		return String(raw).replace(this.ORDER_RE, '') || String(raw);
+		return String(raw).replace(this.orderRegExp(), '') || String(raw);
 	},
 
 	segmentOrder(raw) {
-		let m = String(raw).match(this.ORDER_RE);
-		return m && String(raw).replace(this.ORDER_RE, '') ? parseInt(m[1]) : null;
+		let re = this.orderRegExp();
+		let m = String(raw).match(re);
+		return m && String(raw).replace(re, '') ? parseInt(m[1]) : null;
 	},
 
 	withOrder(name, order, width = 1) {
-		return order == null ? name : String(order).padStart(width, '0') + '_' + name;
+		return order == null ? name : String(order).padStart(width, '0') + this.getOrderSeparator() + name;
 	},
 
 	/**
@@ -442,6 +471,7 @@ SavedSearchFolders = {
 
 		let selection = cv.selection;
 		let focusedID = cv.getRow(selection.focused)?.id;
+		let selectedIDs = [...selection.selected].map(i => cv.getRow(i)?.id).filter(Boolean);
 		let wasSuppressed = selection.selectEventsSuppressed;
 		selection.selectEventsSuppressed = true;
 		cv._lastToggleOpenStateIndex = index;
@@ -464,12 +494,18 @@ SavedSearchFolders = {
 		}
 		cv._refreshRowMap();
 
-		// Keep the same row selected; if it was hidden inside the folder, select the library
-		let newIndex = focusedID !== undefined ? cv._rowMap[focusedID] : undefined;
-		if (newIndex === undefined) {
-			newIndex = cv._rowMap['L' + row.ref.libraryID] ?? 0;
+		// Keep the same rows selected; if they were all hidden inside the folder, select the library
+		let selected = selectedIDs.map(id => cv._rowMap[id]).filter(i => i !== undefined);
+		if (!selected.length) {
+			selected = [cv._rowMap['L' + row.ref.libraryID] ?? 0];
 		}
-		selection.select(newIndex);
+		let focused = focusedID !== undefined ? cv._rowMap[focusedID] : undefined;
+		if (focused === undefined) {
+			focused = selected[selected.length - 1];
+		}
+		selection.selected = new Set(selected);
+		selection.focused = focused;
+		selection.pivot = focused;
 		selection.selectEventsSuppressed = wasSuppressed;
 		cv.tree.invalidate();
 		cv._lastToggleOpenStateIndex = null;
@@ -491,6 +527,8 @@ SavedSearchFolders = {
 	 */
 	async rebuild(cv, targetID, fallbackLibraryID) {
 		await cv.refresh(); // Leaves select events suppressed
+		// The rows were rebuilt, so the selected indices now point at different rows
+		cv.selection.clearSelection();
 		cv.tree.invalidate();
 		let selected = false;
 		if (targetID) {
@@ -581,7 +619,8 @@ SavedSearchFolders = {
 
 		state.cv = cv;
 		this.addStyle(win, state);
-		this.patchSearchDialog(win, state);
+		this.patchSearchEditor(win, cv, state);
+		this.patchSearchConditions(win, state);
 		this.patchTree(cv, state);
 		this.addListeners(win, cv, state);
 		this.addMenus(win, cv, state);
@@ -635,45 +674,172 @@ SavedSearchFolders = {
 	},
 
 	/**
-	 * Zotero's saved search dialog edits the whole name. Show only the search's own name there, and
-	 * put the folder path and order prefix back when it's saved, so renaming doesn't move the search.
+	 * Zotero's saved search editor edits the whole name. Show only the search's own name there, and
+	 * put the folder path and order prefix back when it's read, so renaming doesn't move the search.
 	 * Typing a name that contains the separator still sets the full path on purpose.
+	 *
+	 * This is done on the name field itself, so the editor's "has changes" check and save
+	 * (and Zotero's prompt when leaving with unsaved changes) keep working on the full name.
 	 */
-	patchSearchDialog(win, state) {
-		let orig = win.openDialog;
+	patchSearchEditor(win, cv, state) {
+		let field = win.document.querySelector('#zotero-saved-advanced-search-pane #saved-search-name');
+		if (!field) {
+			this.log('saved search editor not found');
+			return;
+		}
 		let self = this;
-		win.openDialog = function (url, name, features, io, ...rest) {
-			if (typeof url == 'string' && url.includes('searchDialog.xhtml') && io?.dataIn?.search) {
-				return self.openSearchDialog(args => orig.apply(win, args), [url, name, features, io, ...rest], io);
+		let native = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value');
+		let raw = native.get.call(field);
+		Object.defineProperty(field, 'value', {
+			configurable: true,
+			enumerable: true,
+			get() {
+				return self.composeName(raw, native.get.call(field));
+			},
+			set(value) {
+				raw = value;
+				native.set.call(field, self.parse(value).leaf);
 			}
-			return orig.call(this, url, name, features, io, ...rest);
+		});
+		state.cleanups.push(() => {
+			let full = field.value;
+			delete field.value;
+			field.value = full;
+		});
+
+		// The editor also names the tab after the full stored name when saving
+		let tabs = win.Zotero_Tabs;
+		let rename = tabs.rename;
+		tabs.rename = function (id, title, ...rest) {
+			let row = id == 'zotero-pane' ? win.ZoteroPane.getCollectionTreeRows()[0] : null;
+			if (row && row.isSearch() && row.ref.name === title) {
+				title = row.getName();
+			}
+			return rename.call(this, id, title, ...rest);
 		};
 		state.cleanups.push(() => {
-			win.openDialog = orig;
+			tabs.rename = rename;
 		});
 	},
 
-	openSearchDialog(open, args, io) {
-		let search = io.dataIn.search;
-		// Use the stored name: "Edit Saved Search" passes a clone of the search (which keeps the full
-		// name) together with the tree label; new searches only have the proposed name
-		let raw = search.name || io.dataIn.name;
-		let p = this.parse(raw);
-		let m = String(p.leafRaw).trim().match(this.ORDER_RE);
-		let orderPrefix = m && p.order !== null ? m[1] + '_' : '';
-		io.dataIn.name = p.leaf;
-
-		let result = open(args);
-
-		let json = io.dataOut?.json;
-		if (json && (p.folderRaw.length || orderPrefix)) {
-			let typed = String(json.name ?? '').trim();
-			if (typed && !typed.includes(this.getSeparator())) {
-				let leafRaw = this.segmentOrder(typed) !== null ? typed : orderPrefix + typed;
-				json.name = this.makeName(p.folderRaw, leafRaw);
-			}
+	/**
+	 * Zotero's "Saved Search is" menu lists every search by its full stored name. Show the folders
+	 * as submenus instead, in tree order and without the order prefixes. Only the layout changes:
+	 * the menu values are still the search keys, so the condition is stored as Zotero would store it.
+	 */
+	patchSearchConditions(win, state) {
+		// Zotero defines this element lazily, on first use
+		win.document.createXULElement('zoterosearchcondition');
+		let proto = win.customElements.get('zoterosearchcondition')?.prototype;
+		if (!proto?.createValueMenu) {
+			this.log('search condition element not found');
+			return;
 		}
-		return result;
+		let self = this;
+		let refresh = () => {
+			for (let row of win.document.querySelectorAll('zoterosearchcondition')) {
+				if (row.selectedCondition == 'savedSearch') {
+					row.onConditionSelected('savedSearch', true);
+				}
+			}
+		};
+		let createValueMenu = proto.createValueMenu;
+		proto.createValueMenu = function (rows) {
+			if (this.selectedCondition != 'savedSearch') {
+				createValueMenu.call(this, rows);
+				return;
+			}
+			let libraryID = this.parent.search.libraryID;
+			let searches = rows.map(row => Zotero.Searches.getByLibraryAndKey(libraryID, row.value.slice(1)));
+			createValueMenu.call(this, rows.map((row, i) => ({ ...row, name: self.parse(searches[i].name).leaf })));
+			self.nestSearchMenu(this.querySelector('#valuemenu'), searches, this.value);
+		};
+		state.cleanups.push(() => {
+			proto.createValueMenu = createValueMenu;
+			refresh();
+		});
+
+		let onCommand = (event) => {
+			let item = event.target;
+			let menu = item.closest?.('#valuemenu');
+			if (menu && item.hasAttribute('data-ssf-path')) {
+				this.selectSearchItem(menu, item);
+			}
+		};
+		win.document.addEventListener('command', onCommand, true);
+		state.listeners.push({ target: win.document, type: 'command', fn: onCommand, capture: true });
+
+		refresh();
+	},
+
+	/** Move the flat items of a "Saved Search is" menu into submenus, and keep or set its selection */
+	nestSearchMenu(menu, searches, value) {
+		let doc = menu.ownerDocument;
+		let popup = menu.menupopup;
+		let items = new Map([...popup.children].map(item => [item.getAttribute('value'), item]));
+		let current = items.get(value);
+		let first = null;
+		let fill = (node, parent, trail) => {
+			for (let entry of this.children(node)) {
+				if (entry.kind == 'folder') {
+					let folder = doc.createXULElement('menu');
+					folder.className = 'menu-iconic';
+					folder.setAttribute('label', entry.name);
+					folder.setAttribute('image', Zotero.Collection.prototype.treeViewImage);
+					let submenu = doc.createXULElement('menupopup');
+					folder.append(submenu);
+					parent.append(folder);
+					fill(entry.node, submenu, [...trail, entry.name]);
+					continue;
+				}
+				let key = 'S' + entry.search.key;
+				let item = items.get(key);
+				item.setAttribute('data-ssf-path', [...trail, entry.name].join(' › '));
+				parent.append(item);
+				items.delete(key);
+				first ??= item;
+			}
+		};
+		fill(this.buildTree(searches.filter(s => !s.deleted)), popup, []);
+		// Searches in the trash aren't in the tree, but a condition can still point to one
+		for (let item of items.values()) {
+			item.setAttribute('data-ssf-path', item.getAttribute('label'));
+			popup.append(item);
+		}
+
+		let selected = current ?? first ?? popup.querySelector('menuitem');
+		if (selected) {
+			this.selectSearchItem(menu, selected);
+		}
+	},
+
+	/**
+	 * A menulist can't select an item in a submenu by itself, so do what its selection does by hand.
+	 * The closed menu shows the whole path, since many searches can share a short name.
+	 */
+	selectSearchItem(menu, item) {
+		menu.selectedItem = null;
+		menu.querySelector('menuitem[selected]')?.removeAttribute('selected');
+		item.setAttribute('selected', 'true');
+		menu.setAttribute('value', item.getAttribute('value'));
+		menu.setAttribute('label', item.getAttribute('data-ssf-path'));
+		menu.setAttribute('image', item.getAttribute('image'));
+	},
+
+	/** Full search name for what was typed in the editor, given the name it started from */
+	composeName(raw, typed) {
+		typed = String(typed ?? '').trim();
+		let p = this.parse(raw);
+		if (typed === p.leaf) {
+			return raw;
+		}
+		if (!typed || typed.includes(this.getSeparator())) {
+			return typed;
+		}
+		// Keep the search's position, unless a new number was typed
+		let m = String(p.leafRaw).trim().match(this.orderRegExp());
+		let orderPrefix = m && p.order !== null && this.segmentOrder(typed) === null ? m[1] + this.getOrderSeparator() : '';
+		return this.makeName(p.folderRaw, orderPrefix + typed);
 	},
 
 	addStyle(win, state) {
@@ -736,7 +902,7 @@ SavedSearchFolders = {
 				if (this._isFilterEmpty()) {
 					return { matchesFilter: true, hasChildMatchingFilter: true };
 				}
-				let matchesFilter = object.name.toLowerCase().includes(this._filter);
+				let matchesFilter = Zotero.Utilities.Internal.normalizeForSearch(object.name).includes(this._filter);
 				let hasChildMatchingFilter = self.allSearchesIn(object.node).some((s) => {
 					let r = orig.call(this, s, resetCache);
 					return r.matchesFilter || r.hasChildMatchingFilter;
@@ -779,11 +945,7 @@ SavedSearchFolders = {
 				if (!row) {
 					return div;
 				}
-				let indicator = state.dropIndicator;
-				if (indicator && indicator.index === index) {
-					div.classList.toggle('ssf-drop-before', indicator.mode == 'before');
-					div.classList.toggle('ssf-drop-after', indicator.mode == 'after' || indicator.mode == 'into-first');
-				}
+				self.renderDropIndicator(div, state, index);
 				if (row.isSearch()) {
 					let label = div.querySelector('.cell-text');
 					if (label && label.localName != 'input') {
@@ -799,12 +961,6 @@ SavedSearchFolders = {
 						let op = state.combo.terms[termIndex].op;
 						badge.textContent = op ? `${op} ${termIndex + 1}` : '1';
 						label.after(badge);
-					}
-				}
-				else if (isFolder) {
-					// Zotero shifts non-header rows of group libraries one level left on macOS
-					if (Zotero.isMac && row.ref.libraryID != Zotero.Libraries.userLibraryID) {
-						div.style.paddingInlineStart = self.CHILD_INDENT * (row.level - 1) + 'px';
 					}
 				}
 			}
@@ -932,39 +1088,24 @@ SavedSearchFolders = {
 		});
 		row.ssfCombo = combo;
 		row.getName = () => this.comboExpression(combo);
-		// Same as Zotero's "Recently Read" view: results go through a temporary ID table
-		row.getSearchObject = async function () {
-			let cache = Zotero.CollectionTreeCache;
-			if (cache.lastTreeRow && cache.lastTreeRow.id !== this.id) {
-				cache.clear();
-			}
-			if (cache.lastSearch) {
-				return cache.lastSearch;
+		// Like Zotero's "Recently Read" view, results go through a temporary ID table. Zotero's own
+		// code then adds the quick search, tag and advanced search filters on top of it.
+		row.getSearchObject = async function (options = {}) {
+			if (!options.unfiltered && this._cachedSearch) {
+				return this._cachedSearch;
 			}
 			let ids = await self.evaluateCombo(combo);
 			let tmpTable = await Zotero.Search.idsToTempTable(ids, { idColumn: 'id' });
 			let s = new Zotero.Search();
 			s.libraryID = combo.libraryID;
 			s.addCondition('tempTable', 'is', tmpTable);
-			this.onUnload = async function () {
-				await Zotero.DB.queryAsync(`DROP TABLE IF EXISTS ${tmpTable}`, false, { noCache: true });
-			};
-
-			let s2 = new Zotero.Search();
-			s2.libraryID = combo.libraryID;
-			s2.setScope(s, false);
-			if (this.searchText) {
-				let cond = 'quicksearch-' + (this.searchMode || Zotero.Prefs.get('search.quicksearch-mode'));
-				s2.addCondition(cond, 'contains', this.searchText);
+			let view = Object.create(this);
+			view.ref = s;
+			let search = await Zotero.CollectionTreeRow.prototype.getSearchObject.call(view, options);
+			if (!options.unfiltered) {
+				this._cachedSearch = search;
 			}
-			if (this.tags) {
-				for (let tag of this.tags) {
-					s2.addCondition('tag', 'is', tag);
-				}
-			}
-			cache.lastTreeRow = this;
-			cache.lastSearch = s2;
-			return s2;
+			return search;
 		};
 		return row;
 	},
@@ -1053,76 +1194,138 @@ SavedSearchFolders = {
 	},
 
 	/**
-	 * Merge the conditions of the combined searches into one flat condition list
+	 * A search's conditions, split into its match mode, its search-wide options, and its top-level
+	 * "units" (a condition, or a whole nested group of them)
+	 */
+	searchUnits(search) {
+		let mode = 'all';
+		let flags = [];
+		let units = [];
+		let group = null;
+		let depth = 0;
+		for (let c of search.toJSON().conditions) {
+			let base = c.condition.split('/')[0];
+			let token = { condition: c.condition, operator: c.operator, value: c.value };
+			if (base == 'groupStart') {
+				if (!depth) {
+					group = [];
+					units.push(group);
+				}
+				depth++;
+				group.push(token);
+			}
+			else if (base == 'groupEnd') {
+				depth--;
+				group.push(token);
+			}
+			else if (depth) {
+				group.push(token);
+			}
+			else if (base == 'joinMode') {
+				mode = c.operator;
+			}
+			else if (this.FLAG_CONDITIONS.includes(base)) {
+				// The legacy "only top-level items" option is exactly result level = item
+				flags.push(base == 'noChildren' && c.operator == 'true'
+					? { condition: 'resultLevel', operator: 'item', value: '' }
+					: token);
+			}
+			else {
+				units.push([token]);
+			}
+		}
+		return { mode, flags, units };
+	},
+
+	/**
+	 * Build one condition list for a combination, nesting groups where needed. `termUnits` gives
+	 * the mode and units to use for each search.
 	 *
-	 * Zotero saved searches have a single "match all/any" mode and no nested groups, so this is only
-	 * exact when every search with 2+ conditions uses the same mode as the combination and all
-	 * searches share the same search options.
+	 * @return {Object[]} Conditions, without the search-wide options
+	 */
+	comboConditions(combo, termUnits) {
+		// Evaluated left to right: ((A op B) op C) ...
+		let tree = null;
+		for (let { search, op } of combo.terms) {
+			if (!tree) {
+				tree = { search };
+			}
+			else if (tree.op == op) {
+				tree.kids.push({ search });
+			}
+			else {
+				tree = { op, kids: [tree, { search }] };
+			}
+		}
+		let wrap = (mode, units) => [[
+			{ condition: 'groupStart', operator: 'true', value: '' },
+			...(mode == 'any' ? [{ condition: 'joinMode', operator: 'any', value: '' }] : []),
+			...units.flat(),
+			{ condition: 'groupEnd', operator: 'true', value: '' }
+		]];
+		let serialize = (node, parentMode) => {
+			if (node.search) {
+				let { mode, units } = termUnits(node.search);
+				return units.length <= 1 || mode == parentMode ? units : wrap(mode, units);
+			}
+			let mode = node.op == 'AND' ? 'all' : 'any';
+			let seen = new Set();
+			let units = node.kids.flatMap(kid => serialize(kid, mode)).filter((unit) => {
+				let key = JSON.stringify(unit);
+				return seen.has(key) ? false : seen.add(key);
+			});
+			return mode == parentMode ? units : wrap(mode, units);
+		};
+		let rootMode = tree.op == 'AND' ? 'all' : 'any';
+		return [
+			...(rootMode == 'any' ? [{ condition: 'joinMode', operator: 'any', value: '' }] : []),
+			...serialize(tree, rootMode).flat()
+		];
+	},
+
+	/**
+	 * Merge the conditions of the combined searches into one self-contained condition list
 	 *
-	 * @return {{ ok: boolean, conditions?: object[], reason?: string, op?: string, mixed?: boolean }}
+	 * Any mix of AND and OR can be expressed with nested groups. What can't be merged are searches
+	 * with different search-wide options, since those apply to a whole search.
+	 *
+	 * @return {{ ok: boolean, conditions?: object[], reason?: string }}
 	 */
 	mergeCombo(combo) {
-		let ops = new Set(combo.terms.slice(1).map(t => t.op));
-		if (ops.size > 1) {
-			return { ok: false, mixed: true, reason: 'it mixes AND and OR' };
-		}
-		let op = [...ops][0];
-		let joinMode = op == 'AND' ? 'all' : 'any';
 		let flagsKey = null;
-		let flags = [];
-		let conditions = [];
-		let seen = new Set();
+		let flags = new Map();
+		let parts = new Map();
 		for (let { search } of combo.terms) {
 			let leaf = this.parse(search.name).leaf;
-			let mode = 'all';
-			let searchFlags = [];
-			let regular = [];
-			for (let c of search.toJSON().conditions) {
-				let base = c.condition.split('/')[0];
-				if (base == 'joinMode') {
-					mode = c.operator;
-				}
-				else if (this.FLAG_CONDITIONS.includes(base)) {
-					searchFlags.push(c);
-				}
-				else {
-					regular.push(c);
-				}
-			}
-			let key = searchFlags.map(c => `${c.condition}|${c.operator}|${c.value}`).sort().join(';');
+			let part = this.searchUnits(search);
+			parts.set(search, part);
+			// "Search subcollections" only affects Collection conditions
+			let hasCollection = part.units.flat().some(c => c.condition.split('/')[0] == 'collection');
+			let relevant = part.flags.filter(c => c.condition != 'recursive' || hasCollection);
+			let key = relevant.map(c => `${c.condition}|${c.operator}`).sort().join(';');
 			if (flagsKey === null) {
 				flagsKey = key;
-				flags = searchFlags;
 			}
 			else if (key !== flagsKey) {
-				return { ok: false, op, reason: `“${leaf}” uses different search options (such as “Show only top-level items” or “Include parent and child items”) than the others` };
+				return { ok: false, reason: `“${leaf}” uses different search options (such as the result level or “Include parent and child items”) than the others` };
 			}
-			if (regular.length >= 2 && mode != joinMode) {
-				return { ok: false, op, reason: `“${leaf}” matches ${mode == 'any' ? 'any' : 'all'} of its conditions, which can't be flattened into an ${op} combination` };
+			for (let c of part.flags) {
+				flags.set(c.condition, c);
 			}
-			if (!regular.length && op == 'OR') {
-				return { ok: false, op, reason: `“${leaf}” has no conditions` };
-			}
-			for (let c of regular) {
-				let k = JSON.stringify([c.condition, c.operator, c.value]);
-				if (!seen.has(k)) {
-					seen.add(k);
-					conditions.push({ condition: c.condition, operator: c.operator, value: c.value });
-				}
+			if (!part.units.length && combo.terms.slice(1).some(t => t.op == 'OR')) {
+				return { ok: false, reason: `“${leaf}” has no conditions` };
 			}
 		}
-		let result = [];
-		if (joinMode == 'any') {
-			result.push({ condition: 'joinMode', operator: 'any', value: '' });
-		}
-		result.push(...flags.map(c => ({ condition: c.condition, operator: c.operator, value: c.value })), ...conditions);
-		return { ok: true, op, conditions: result };
+		return {
+			ok: true,
+			conditions: [...this.comboConditions(combo, search => parts.get(search)), ...flags.values()]
+		};
 	},
 
 	/**
 	 * Save the current combination as a new saved search with the merged conditions
 	 */
-	async saveCombo(win, cv, state, showDialog = true) {
+	async saveCombo(win, cv, state, openEditor = true) {
 		let combo = state.combo;
 		if (!combo) return false;
 		let merged = this.mergeCombo(combo);
@@ -1130,54 +1333,39 @@ SavedSearchFolders = {
 		if (merged.ok) {
 			conditions = merged.conditions;
 		}
-		else if (merged.mixed) {
-			Services.prompt.alert(win, 'Save Combination',
-				'This combination mixes AND and OR. Zotero saved searches can only match “all” or “any” '
-				+ 'of their conditions, without nested groups, so it can’t be saved as one search.\n\n'
-				+ 'Tip: save the AND part first, then combine that saved search with OR.');
-			return false;
-		}
 		else {
 			let ok = Services.prompt.confirm(win, 'Save Combination',
 				`These searches can’t be merged into one self-contained saved search: ${merged.reason}.\n\n`
-				+ 'Zotero saved searches can only match “all” or “any” of their conditions, without nested groups.\n\n'
 				+ 'Save a search that refers to the original saved searches instead? '
 				+ '(It stops working if one of them is deleted.)');
 			if (!ok) return false;
-			conditions = [];
-			if (merged.op == 'OR') {
-				conditions.push({ condition: 'joinMode', operator: 'any', value: '' });
-			}
-			for (let { search } of combo.terms) {
-				conditions.push({ condition: 'savedSearch', operator: 'is', value: search.key });
-			}
+			conditions = this.comboConditions(combo, search => ({
+				mode: 'all',
+				units: [[{ condition: 'savedSearch', operator: 'is', value: search.key }]]
+			}));
 		}
 		let anchor = combo.terms[0].search;
 		let tree = this.buildTree(this.getSearches(combo.libraryID, true));
 		let name = this.makeName(this.rawPathFor(tree, this.parse(anchor.name).folder), this.comboExpression(combo));
-		return this.createSearch(win, combo.libraryID, name, conditions, showDialog);
+		return this.createSearch(win, combo.libraryID, name, conditions, openEditor);
 	},
 
 	/**
-	 * Create a saved search, optionally letting the user review it in Zotero's search dialog first
+	 * Create a saved search, optionally selecting it and opening it in Zotero's search editor
 	 */
-	async createSearch(win, libraryID, name, conditions, showDialog) {
+	async createSearch(win, libraryID, name, conditions, openEditor) {
 		if (Zotero.DB.inTransaction()) {
 			await Zotero.DB.waitForTransaction();
 		}
 		let s = new Zotero.Search();
 		s.libraryID = libraryID;
 		s.fromJSON({ name, conditions });
-		if (showDialog) {
-			let io = { dataIn: { search: s, name }, dataOut: null };
-			win.openDialog('chrome://zotero/content/searchDialog.xhtml', '', 'chrome,modal,centerscreen', io);
-			if (!io.dataOut) {
-				return false;
-			}
-			s.fromJSON(io.dataOut.json);
-		}
 		this.openFolderPath(libraryID, this.parse(s.name).folder);
 		await s.saveTx();
+		if (openEditor) {
+			await win.ZoteroPane.collectionsView.selectByID('S' + s.id);
+			await win.ZoteroPane.setSavedSearchEditorState('open');
+		}
 		return s;
 	},
 
@@ -1200,24 +1388,39 @@ SavedSearchFolders = {
 		};
 		let domEl = cv.domEl;
 
+		// Zotero 10 has its own multi-selection, handled on mouseup. For two saved searches,
+		// Ctrl/Cmd+click means AND and Shift+click means OR instead. Anything else stays native.
+		listen(domEl, 'mouseup', (event) => {
+			if (event.button != 0 || event.altKey
+					|| !(event.ctrlKey || event.metaKey || event.shiftKey)) {
+				return;
+			}
+			let { row } = rowFromEvent(event);
+			if (!row || !row.isSearch() || cv.selection.count != 1) return;
+			let current = cv.getRow(cv.selection.focused);
+			if (current && current.isSearch() && (current !== row || row === state.comboRow)
+					&& current.ref.libraryID == row.ref.libraryID) {
+				event.stopPropagation();
+				this.toggleComboMember(cv, state, row.ref, event.shiftKey ? 'OR' : 'AND')
+					.catch(e => this.showError(win, e));
+			}
+		});
+
+		// Pressing the mouse on a row selects it right away, which would end the combination before
+		// one of its members could be dragged. Zotero still selects it on mouseup if it's just a click.
+		listen(domEl, 'mousedown', (event) => {
+			if (event.button != 0 || event.ctrlKey || event.metaKey || event.shiftKey) return;
+			let { row } = rowFromEvent(event);
+			if (state.combo && row && row.isSearch() && row !== state.comboRow
+					&& state.combo.terms.some(t => t.search.id == row.ref.id)) {
+				event.stopPropagation();
+			}
+		});
+
+		// Click anywhere on a folder row toggles it (the twisty handles its own clicks)
 		listen(domEl, 'click', (event) => {
 			if (event.button != 0) return;
 			let { index, row } = rowFromEvent(event);
-			if (!row) return;
-			// Ctrl/Cmd+click = AND, Shift+click = OR
-			let modifier = event.ctrlKey || event.metaKey || event.shiftKey;
-			if (modifier && row.isSearch() && !event.altKey) {
-				let current = cv.getRow(cv.selection.focused);
-				if (current && current.isSearch() && (current !== row || row === state.comboRow)
-						&& current.ref.libraryID == row.ref.libraryID) {
-					event.preventDefault();
-					event.stopPropagation();
-					this.toggleComboMember(cv, state, row.ref, event.shiftKey ? 'OR' : 'AND')
-						.catch(e => this.showError(win, e));
-				}
-				return;
-			}
-			// Click anywhere on a folder row toggles it (the twisty handles its own clicks)
 			if (this.isFolderRow(row) && !event.target.closest('.twisty')) {
 				this.toggleFolder(cv, index);
 			}
@@ -1259,23 +1462,37 @@ SavedSearchFolders = {
 				// Zotero handles the drag itself; remember what is being dragged. Dragging any member of
 				// a Ctrl/Shift-click selection drags all of them, in the order they were selected.
 				let searches = [row.ref];
-				if (state.combo && state.combo.terms.some(t => t.search.id == row.ref.id)) {
+				let group = state.combo && state.combo.terms.some(t => t.search.id == row.ref.id);
+				if (group) {
 					searches = state.combo.terms.map(t => t.search);
 				}
-				this._drag = { type: 'search', libraryID: row.ref.libraryID, searches };
+				this._drag = { type: 'search', libraryID: row.ref.libraryID, searches, group };
+				if (group) {
+					// Zotero would select the dragged row, ending the combination
+					event.dataTransfer.setData('zotero/ssf-searches', searches.map(s => s.id).join(','));
+					event.dataTransfer.effectAllowed = 'move';
+					event.stopPropagation();
+				}
 			}
 			else {
 				this._drag = null;
 			}
 		});
 
-		// Drop indicator: a line above/below the row for before/after, Zotero's own highlight for "into"
+		// Drop indicator: a line above/below the row for before/after, Zotero's own highlight for
+		// "into". Updated on the existing row elements, like Zotero does: re-rendering the row under
+		// the pointer during a drag can keep it from getting a dragleave.
 		let setIndicator = (indicator) => {
 			let old = state.dropIndicator;
 			if (old?.index === indicator?.index && old?.mode === indicator?.mode) return;
 			state.dropIndicator = indicator;
-			cv._dropRow = indicator && indicator.mode == 'into' ? indicator.index : null;
-			cv.tree.invalidate();
+			for (let index of new Set([old?.index, indicator?.index])) {
+				let div = typeof index == 'number' ? cv.tree.getRowElement(index) : null;
+				if (div) {
+					this.renderDropIndicator(div, state, index);
+				}
+			}
+			cv._setDropRow(indicator && indicator.mode == 'into' ? indicator.index : null);
 		};
 		let dropFraction = (event, div) => {
 			let rect = div?.getBoundingClientRect();
@@ -1299,8 +1516,8 @@ SavedSearchFolders = {
 			}
 			else {
 				if (state.dropIndicator) setIndicator(null);
-				if (this._drag.type == 'folder') {
-					// Nothing else in the tree accepts folders
+				if (this._drag.type == 'folder' || this._drag.group) {
+					// Nothing else in the tree accepts these
 					event.stopPropagation();
 					event.dataTransfer.dropEffect = 'none';
 				}
@@ -1323,8 +1540,15 @@ SavedSearchFolders = {
 			event.stopPropagation();
 			this._drag = null;
 			setIndicator(null);
+			Zotero.DragDrop.currentDropEffect = null;
 			this.dropEntry(drag, target).catch(e => this.showError(win, e));
 		});
+	},
+
+	renderDropIndicator(div, state, index) {
+		let mode = state.dropIndicator?.index === index ? state.dropIndicator.mode : null;
+		div.classList.toggle('ssf-drop-before', mode == 'before');
+		div.classList.toggle('ssf-drop-after', mode == 'after' || mode == 'into-first');
 	},
 
 	/**
@@ -1534,14 +1758,18 @@ SavedSearchFolders = {
 	buildCollectionMenuItems(win, cv, state) {
 		let doc = win.document;
 		let items = [];
-		let row = win.ZoteroPane.getCollectionTreeRow();
-		if (!row) return items;
+		// With several rows selected (Zotero's own multi-selection), leave the menu as it is
+		let rows = win.ZoteroPane.getCollectionTreeRows();
+		if (rows.length != 1) return items;
+		let row = rows[0];
 		let run = fn => () => fn().catch(e => this.showError(win, e));
 
 		// Library: new folder, sort top level
 		if ((row.isLibrary() || row.isGroup()) && row.ref.libraryID) {
 			let libraryID = row.ref.libraryID;
 			let attrs = this.isLibraryEditable(libraryID) ? {} : { disabled: 'true' };
+			items.push(this.createMenuItem(doc, 'New Saved Search…',
+				run(() => this.newSearchInFolder(win, libraryID, [])), attrs));
 			items.push(this.createMenuItem(doc, 'New Search Folder…',
 				run(() => this.newFolder(win, libraryID, [])), attrs));
 			let hasOrder = this.siblingInfo(libraryID, [], () => false).entries.some(e => e.order !== null);
@@ -1913,13 +2141,13 @@ SavedSearchFolders = {
 		let tree = this.buildTree(this.getSearches(libraryID, true));
 		let folderRaw = this.rawPathFor(tree, path, parentPath.map(() => null).concat(raw));
 		let name = this.makeName(folderRaw, this.nextUntitledName(libraryID, path));
-		return this.createSearch(win, libraryID, name, [{ condition: 'title', operator: 'contains', value: '' }], false);
+		return this.createSearch(win, libraryID, name, this.BLANK_CONDITIONS, false);
 	},
 
-	/** Same as ZoteroPane.newSearch(), but with the name pre-filled with the folder path */
+	/** Create a blank search in a folder and open it in Zotero's search editor */
 	async newSearchInFolder(win, libraryID, path) {
 		let tree = this.buildTree(this.getSearches(libraryID, true));
 		let name = this.makeName(this.rawPathFor(tree, path), this.nextUntitledName(libraryID, path));
-		return this.createSearch(win, libraryID, name, [{ condition: 'title', operator: 'contains', value: '' }], true);
+		return this.createSearch(win, libraryID, name, this.BLANK_CONDITIONS, true);
 	}
 };

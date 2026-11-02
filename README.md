@@ -4,15 +4,23 @@ Organise Zotero's saved searches into collapsible folders, put them in your own 
 combine them on the fly with AND / OR. Everything is stored in the saved search names, so
 it syncs everywhere and nothing breaks if you uninstall the plugin.
 
-| Before: every saved search in one flat list | After: one collapsible *Saved Searches* folder, with your own folders and order inside |
-|:---:|:---:|
-| ![Before](docs/before.png) | ![After](docs/after.png) |
+**Before** (left): every saved search in one flat list. **After** (right): one collapsible *Saved Searches* folder, with your own folders and order inside.
 
-**Combining searches:** Ctrl+click *Cryo-EM*, then *Ice*, to see only the papers that match both:
+<p>
+  <img src="docs/before.png" alt="Before: every saved search in one flat list" width="22%">
+  &nbsp;&nbsp;
+  <img src="docs/after.png" alt="After: saved searches in collapsible folders" width="22%">
+</p>
 
-![Combining two saved searches with AND](docs/combine.png)
+**Combining searches:** Ctrl+click adds a search with AND, and Shift+click adds one with OR. Here, *Cryo-EM* AND *Ice*, OR *Protein aggregation*:
 
-Works with Zotero 7, 8 and 9 (tested on 9.0.6).
+![Combining saved searches with AND and OR](docs/combine.png)
+
+**Your folders in Zotero's search conditions:** the *Saved Search is* menu follows the same folders and order:
+
+![The Saved Search menu in advanced search, with folders as submenus](docs/search-menu.png)
+
+Works with Zotero 10 (tested on 10.0.7). For Zotero 7–9, use [version 1.0](../../releases/tag/v1.0), which is the last version for those releases.
 
 ---
 
@@ -56,8 +64,9 @@ Because of that:
 - **It syncs** to your other computers and to group libraries through normal Zotero sync. Nothing extra to set up.
 - **Removing the plugin breaks nothing.** You see the full names like `People/Marie Curie`, still
   sorted by folder and in your custom order, since `1_`, `2_` sort the same way in Zotero's own list.
-- **Saved combinations are ordinary saved searches.** They contain the merged conditions
-  rather than references to other searches, so deleting one of the originals doesn't break them.
+- **Saved combinations are ordinary saved searches.** They contain the merged conditions (using
+  Zotero 10's nested condition groups where needed) rather than references to other searches, so
+  deleting one of the originals doesn't break them.
 - The *Saved Searches* folder that holds everything is purely visual: it doesn't rename anything, so you can
   tidy up your left pane on day one, before organising a single search.
 - The only thing stored locally is which folders are open, like Zotero does for collections.
@@ -73,10 +82,11 @@ Because of that:
 - **Custom order:** drag searches and folders up and down, use *Move Up / Move Down* in the right-click menu, or type a `1_`, `2_` … prefix yourself.
 - **Combine searches:** Ctrl+click (Cmd+click on macOS) adds a search with **AND**, and Shift+click adds one
   with **OR**. Badges (`1`, `AND 2`, `OR 3`) show what's combined, and the items list shows the result.
-- **Save a combination** as a new, self-contained saved search.
+- **Save a combination** as a new, self-contained saved search, including mixes like `(A AND B) OR C`.
 - **Drag and drop** to reorder, to move searches into folders, to nest folders, or onto *Saved Searches* to move to the top level.
   Dragging one of several Ctrl/Shift-clicked searches moves them all.
-- **Renaming keeps the folder:** Zotero's *Edit Saved Search* dialog shows just the search's own name, and the folder and position are kept when you save.
+- **Renaming keeps the folder:** Zotero's search editor shows just the search's own name, and the folder and position are kept when you save.
+- **A tidy *Saved Search is* menu:** in Zotero's search conditions, your folders appear as submenus, in your own order and without the `1_` prefixes.
 - Works with the collection filter (the magnifier at the top of the left pane), in group libraries, and in read-only libraries (view only).
 
 ## Install
@@ -93,6 +103,7 @@ Because of that:
 | Create a folder | Right-click *Saved Searches* or *My Library* (or a group) → **New Search Folder…**. Enter a name; a blank *Untitled* search is placed in it (a folder exists as long as it contains a search). Drag your searches in, then edit or delete *Untitled*. |
 | Create a subfolder | Right-click a folder → **New Subfolder…** |
 | Put a search in a folder | Drag it onto the folder, or right-click → **Move to Search Folder ▸** |
+| New search in a folder | Right-click the folder → **New Saved Search in Folder…**. It's created blank and opens in Zotero's search editor. |
 | Rename a search | Right-click → **Edit Saved Search**. The name field shows only the search's own name, and the folder and position are kept. Typing a full path such as `Other folder/Name` moves it there. |
 | Move to the top level | Drag onto *Saved Searches* (or *My Library*), or **Move to Search Folder ▸ (Top level)** |
 | Move several searches at once | Ctrl/Shift-click them, then drag any of them |
@@ -116,25 +127,24 @@ Numbered entries come first; un-numbered folders, then searches, follow alphabet
 2. **Ctrl+click** (macOS: **Cmd+click**) another search to combine with **AND**, or **Shift+click** to combine with **OR**.
    Ctrl/Shift+click a highlighted search again to remove it.
 3. You can also right-click → **Add Saved Search with AND ▸ / OR ▸** to pick from a menu.
-4. Right-click → **Save Combination as Saved Search…** opens Zotero's search editor with the merged
-   conditions, so you can review and name the new search before saving.
+4. Right-click → **Save Combination as Saved Search…** creates the new search next to the first one and
+   opens it in Zotero's search editor, so you can review and rename it. To discard it, delete it like any
+   other search.
+
+Zotero 10 has its own multi-select in the left pane, which shows everything from all selected rows. This
+plugin only changes that for two saved searches, where Ctrl/Cmd+click means AND and Shift+click means OR.
+Collections and libraries, and selections that start from one, keep Zotero's normal behaviour.
 
 Clicking any other row ends the combination. Dragging one of the highlighted searches moves the whole
 group (handy for filing several searches into a folder at once).
 
 Combinations are evaluated left to right: `A AND B OR C` means `(A AND B) OR C`.
 
-**When can a combination be saved as one self-contained search?** Zotero's saved searches
-match either *all* or *any* of their conditions, and can't nest groups. So a combination can be
-merged exactly when:
-
-- it uses only AND or only OR,
-- every search with two or more conditions uses the matching mode ("all" for AND, "any" for OR), and
-- the searches share the same options ("Show only top-level items", "Include parent and child items", …).
-
-Otherwise the plugin explains why. Where possible, it offers to save a search that *refers to*
-the originals instead, which is Zotero's standard method (that version does depend on the originals).
-The live combined view itself is always exact.
+**When can a combination be saved as one self-contained search?** Almost always: any mix of AND and OR
+is saved using nested condition groups. The exception is searches with different search-wide options
+(the result level, or "Include parent and child items"), because those apply to a whole search. In that
+case the plugin explains why and offers to save a search that *refers to* the originals instead, which
+does depend on them. The live combined view itself is always exact.
 
 ## Options
 
@@ -145,24 +155,25 @@ To use a different folder separator than `/` (for example `»` or `::`), set thi
 extensions.savedsearchfolders.separator
 ```
 
+To number searches with something other than `_`, set this one, for example to `~`, so that `2~People` is
+shown as *People*. This is useful if you have searches whose names really start with a number and an
+underscore, like `2_Reasons`, since their `2_` would otherwise be hidden:
+
+```
+extensions.savedsearchfolders.orderSeparator
+```
+
 To show folders directly under *My Library* without the *Saved Searches* folder, set
 `extensions.savedsearchfolders.rootFolder` to `false`.
+
+Restart Zotero after changing these. They don't rename your existing searches, so any that use the old
+separator appear with their full names until you rename them.
 
 ## Limitations
 
 - Folder rows can't be selected, so keyboard arrows skip them.
-- A search whose name genuinely starts with digits and an underscore (e.g. `2_Reasons`) has that part hidden.
 - Searches can't be placed inside collections. This only organises the saved-search part of the tree.
-- The plugin hooks into Zotero's internal collection tree, so a future Zotero version may need an update.
-
-## Development
-
-```
-python build.py        # writes saved-search-folders-<version>.xpi
-```
-
-To release: bump `version` in `manifest.json` and `updates.json`, build, and attach the `.xpi`
-to a GitHub release tagged `v<version>`. Zotero checks `updates.json` for automatic updates.
+- The plugin hooks into Zotero's internal collection tree, so a future Zotero version that changes it may require you to update the plugin.
 
 ## License
 
